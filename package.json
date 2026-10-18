@@ -7,7 +7,7 @@
   "scripts": {
     "data": "tsx scripts/build-data.ts",
     "dev": "npm run data && vite",
-    "build": "npm run typecheck && npm run data && vite build",
+    "build": "npm run typecheck && vite build",
     "preview": "vite preview",
     "check": "tsx scripts/check-images.ts",
     "sync": "tsx scripts/sync-notes.ts",

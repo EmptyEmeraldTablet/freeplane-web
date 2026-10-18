@@ -2,6 +2,7 @@
 node_modules/
 dist/
 public/data/
+.wrangler/
 
 # 笔记同步状态（每台机器不同，不要提交）
 .notes-sync.json

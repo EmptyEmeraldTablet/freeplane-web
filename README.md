@@ -64,7 +64,7 @@ npm run build
 | `npm run sync:push` | 同上，并 `git push` 触发 Pages 部署 |
 | `npm run dev` | 生成数据 + 启动 Vite |
 | `npm run data` | 只重新生成 `public/data/*` |
-| `npm run build` | 类型检查 → 生成数据 → 打包到 `dist/` |
+| `npm run build` | 类型检查 → `vite build`（构建时解析笔记）→ `dist/` |
 | `npm run check` | 图片体检（绝对路径 / 缺失文件），不改文件 |
 | `npm run typecheck` | 只跑 `tsc --noEmit` |
 | `npm run preview` | 本地预览 `dist/` |
@@ -225,14 +225,53 @@ public/notes/
 - 图片加载完成后自动重排一次（markmap 在图片撑开前就测量了尺寸，会重叠）
 - 25 MiB 单文件限制：超大的截图建议先压到长边 1600px
 
-## Cloudflare Pages
+## 部署到 Cloudflare
+
+这是纯静态站点（`dist/` 里只有 HTML/CSS/JS/JSON），两种方式都行。
+
+### 方式 A：Pages（推荐，最省事）
 
 | 配置项 | 值 |
 | --- | --- |
+| 项目类型 | Pages → Connect to Git |
 | Framework preset | None |
 | Build command | `npm run build` |
 | Build output directory | `dist` |
 | 环境变量 | `NODE_VERSION=22`（需 ≥ 22，`tsx` 与 Vite 8 都要求较新的 Node） |
+
+Pages 没有「Deploy command」这一项，构建完直接发布。
+
+### 方式 B：Workers（`npx wrangler deploy`）
+
+仓库根目录已带 `wrangler.jsonc`：
+
+```jsonc
+{
+  "name": "my-freeplane-notes",
+  "compatibility_date": "2026-10-18",
+  "assets": { "directory": "./dist" }
+}
+```
+
+| 配置项 | 值 |
+| --- | --- |
+| Build command | `npm run build` |
+| Deploy command | `npx wrangler deploy` |
+| 环境变量 | `NODE_VERSION=22` |
+
+`name` 改成 Cloudflare 上那个 Worker 的名字（Workers Builds 默认会用项目名覆盖，保持一致更稳妥）。
+本地可以先验证：`npm run build && npx wrangler deploy --dry-run` —— 会打印 `Read N files from the assets directory .../dist`。
+
+### 报错 `Cannot modify Vite config: could not find a valid plugins array`
+
+原因：仓库里没有 wrangler 配置时，`wrangler deploy` 会做「框架自动识别」，发现是 Vite 项目就想往 `vite.config.ts` 里插 `@cloudflare/vite-plugin`；我们的配置里没有 `plugins` 数组，于是它抛这个错。
+
+**不要按提示加 `plugins: []`** —— 那会让 wrangler 真的去装 Cloudflare Vite 插件，把纯静态站改成 Workers 运行时模型，属于杀鸡用牛刀。
+
+正确做法二选一：
+
+1. 用方式 A（Pages），根本不跑 wrangler；
+2. 保留 Worker：加上仓库里的 `wrangler.jsonc`（声明 `assets.directory = ./dist`），wrangler 就不再尝试改 Vite 配置了。
 
 推送 GitHub 即触发构建（免费版 500 次/月，单次上限 20 分钟）。私有仓库可连接，但站点默认公开；需要私密访问时套一层 **Cloudflare Access**。
 

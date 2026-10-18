@@ -1,15 +1,10 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { parseFreeplane, htmlBody } from '../shared/parser.ts';
 import { collectRefs, buildAssets } from '../shared/refs.ts';
 import { ROOT, findMaps, loadConfig, toPosix } from './shared.ts';
 import type { Manifest, ManifestEntry, MapData, MapNode, SiteNode } from '../shared/types.ts';
-
-const NOTES_DIR = loadConfig().notesDir;
-const OUT_DIR = path.join(ROOT, 'public/data/maps');
-const MANIFEST = path.join(ROOT, 'public/data/manifest.json');
-
-fs.mkdirSync(OUT_DIR, { recursive: true });
 
 const ICON_MAP: Record<string, string> = {
   idea: '💡', book: '📖', book_open: '📖', attach: '📎', bell: '🔔', info: 'ℹ️',
@@ -68,95 +63,121 @@ function walk(node: MapNode, acc: WalkAcc, depth = 0): void {
   node.children.forEach((c) => walk(c, acc, depth + 1));
 }
 
-const files = findMaps(NOTES_DIR).sort((a, b) => a.rel.localeCompare(b.rel, 'zh'));
-const manifest: ManifestEntry[] = [];
-let totalProblems = 0;
-
-if (!files.length) {
-  console.warn(`[warn] ${toPosix(path.relative(ROOT, NOTES_DIR))} 下没有 .mm 文件`);
+export interface BuildResult {
+  maps: number;
+  problems: number;
 }
 
-for (const { abs, rel } of files) {
-  const xml = fs.readFileSync(abs, 'utf8').replace(/^\uFEFF/, '');
-  const t0 = performance.now();
-  const map = parseFreeplane(xml);
-  const ms = performance.now() - t0;
-  if (!map.root) {
-    console.warn(`[skip] ${rel}: 找不到根节点（文件可能已加密）`);
-    continue;
+/**
+ * 把 public/notes 下的 .mm 解析成 public/data/*.json。
+ * 既可以被 `npm run data` 直接调用，也会被 vite.config.ts 的插件在构建时调用
+ * （有些平台只跑 `vite build`，不会执行 package.json 里的前置脚本）。
+ */
+export function buildData(): BuildResult {
+  const notesDir = loadConfig().notesDir;
+  const outDir = path.join(ROOT, 'public/data/maps');
+  const manifestPath = path.join(ROOT, 'public/data/manifest.json');
+
+  fs.mkdirSync(outDir, { recursive: true });
+
+  const files = findMaps(notesDir).sort((a, b) => a.rel.localeCompare(b.rel, 'zh'));
+  const manifest: ManifestEntry[] = [];
+  let totalProblems = 0;
+
+  if (!files.length) {
+    console.warn(`[warn] ${toPosix(path.relative(ROOT, notesDir))} 下没有 .mm 文件`);
   }
-  if (map.error) console.warn(`[warn] ${rel}: XML 解析告警 ${map.error.message}`);
 
-  const acc: WalkAcc = { count: 0, depth: 0, details: 0, notes: 0, links: 0, attrs: 0, index: [] };
-  walk(map.root, acc);
+  for (const { abs, rel } of files) {
+    const xml = fs.readFileSync(abs, 'utf8').replace(/^\uFEFF/, '');
+    const t0 = performance.now();
+    const map = parseFreeplane(xml);
+    const ms = performance.now() - t0;
+    if (!map.root) {
+      console.warn(`[skip] ${rel}: 找不到根节点（文件可能已加密）`);
+      continue;
+    }
+    if (map.error) console.warn(`[warn] ${rel}: XML 解析告警 ${map.error.message}`);
 
-  // —— 图片 / 附件引用分析 ——
-  const refs = collectRefs(map.root, map.freeNodes);
-  const { assets, stats: imgStats, problems } = buildAssets(refs, abs, NOTES_DIR);
-  totalProblems += problems.length;
+    const acc: WalkAcc = { count: 0, depth: 0, details: 0, notes: 0, links: 0, attrs: 0, index: [] };
+    walk(map.root, acc);
 
-  const slug = rel.replace(/\.mm$/i, '').replace(/\//g, '__');
-  const dir = path.posix.dirname(toPosix(rel));
-  const base = dir === '.' ? 'notes/' : `notes/${dir}/`;
+    // —— 图片 / 附件引用分析 ——
+    const refs = collectRefs(map.root, map.freeNodes);
+    const { assets, stats: imgStats, problems } = buildAssets(refs, abs, notesDir);
+    totalProblems += problems.length;
 
-  const out: MapData = {
-    slug,
-    path: rel,
-    base,
-    version: map.version,
-    title: map.root.text.split('\n')[0]!.slice(0, 120),
-    root: serialize(map.root),
-    free: map.freeNodes.map(serialize),
-    assets,
-    stats: {
-      nodes: acc.count,
-      depth: acc.depth + 1,
-      details: acc.details,
-      notes: acc.notes,
-      links: acc.links,
-      attrs: acc.attrs,
-      parseMs: Math.round(ms),
-      sizeKB: Math.round(Buffer.byteLength(xml) / 1024),
+    const slug = rel.replace(/\.mm$/i, '').replace(/\//g, '__');
+    const dir = path.posix.dirname(toPosix(rel));
+    const base = dir === '.' ? 'notes/' : `notes/${dir}/`;
+
+    const out: MapData = {
+      slug,
+      path: rel,
+      base,
+      version: map.version,
+      title: map.root.text.split('\n')[0]!.slice(0, 120),
+      root: serialize(map.root),
+      free: map.freeNodes.map(serialize),
+      assets,
+      stats: {
+        nodes: acc.count,
+        depth: acc.depth + 1,
+        details: acc.details,
+        notes: acc.notes,
+        links: acc.links,
+        attrs: acc.attrs,
+        parseMs: Math.round(ms),
+        sizeKB: Math.round(Buffer.byteLength(xml) / 1024),
+        images: imgStats,
+      },
+      index: acc.index,
+    };
+    fs.writeFileSync(path.join(outDir, `${slug}.json`), JSON.stringify(out));
+
+    manifest.push({
+      slug,
+      path: rel,
+      title: out.title,
+      base,
+      nodes: out.stats.nodes,
+      depth: out.stats.depth,
+      details: out.stats.details,
       images: imgStats,
-    },
-    index: acc.index,
-  };
-  fs.writeFileSync(path.join(OUT_DIR, `${slug}.json`), JSON.stringify(out));
+      warnings: problems.slice(0, 8),
+    });
 
-  manifest.push({
-    slug,
-    path: rel,
-    title: out.title,
-    base,
-    nodes: out.stats.nodes,
-    depth: out.stats.depth,
-    details: out.stats.details,
-    images: imgStats,
-    warnings: problems.slice(0, 8),
-  });
-
-  const bad = problems.length ? ` · ⚠ ${problems.length} 个问题` : '';
-  console.log(
-    `[ok] ${rel} | ${acc.count} nodes | depth ${acc.depth + 1} | ` +
-      `图片 ${imgStats.relative} 相对 / ${imgStats.absolute} 绝对 / ${imgStats.remote} 远程${bad} | ${ms.toFixed(1)}ms`,
-  );
-  for (const p of problems.slice(0, 5)) {
-    console.warn(`      ↳ ${p.reason}：${p.ref}${p.node ? `（节点：${p.node}）` : ''}`);
+    const bad = problems.length ? ` · ⚠ ${problems.length} 个问题` : '';
+    console.log(
+      `[ok] ${rel} | ${acc.count} nodes | depth ${acc.depth + 1} | ` +
+        `图片 ${imgStats.relative} 相对 / ${imgStats.absolute} 绝对 / ${imgStats.remote} 远程${bad} | ${ms.toFixed(1)}ms`,
+    );
+    for (const p of problems.slice(0, 5)) {
+      console.warn(`      ↳ ${p.reason}：${p.ref}${p.node ? `（节点：${p.node}）` : ''}`);
+    }
   }
-}
 
-// 清掉已经不存在的旧 slug，避免 dist 里残留
-const keep = new Set(manifest.map((m) => `${m.slug}.json`));
-for (const name of fs.readdirSync(OUT_DIR)) {
-  if (name.endsWith('.json') && !keep.has(name)) {
-    fs.rmSync(path.join(OUT_DIR, name));
-    console.log(`[clean] 移除过期数据 ${name}`);
+  // 清掉已经不存在的旧 slug，避免 dist 里残留
+  const keep = new Set(manifest.map((m) => `${m.slug}.json`));
+  for (const name of fs.readdirSync(outDir)) {
+    if (name.endsWith('.json') && !keep.has(name)) {
+      fs.rmSync(path.join(outDir, name));
+      console.log(`[clean] 移除过期数据 ${name}`);
+    }
   }
+
+  const output: Manifest = { generatedAt: new Date().toISOString(), maps: manifest };
+  fs.writeFileSync(manifestPath, JSON.stringify(output, null, 2));
+  console.log(`\n${manifest.length} map(s) → ${toPosix(path.relative(ROOT, manifestPath))}`);
+  if (totalProblems) {
+    console.warn(`\n⚠ 共 ${totalProblems} 个图片引用需要处理。绝对路径必须在本地改成相对路径后重新提交。`);
+  }
+
+  return { maps: manifest.length, problems: totalProblems };
 }
 
-const output: Manifest = { generatedAt: new Date().toISOString(), maps: manifest };
-fs.writeFileSync(MANIFEST, JSON.stringify(output, null, 2));
-console.log(`\n${manifest.length} map(s) → ${toPosix(path.relative(ROOT, MANIFEST))}`);
-if (totalProblems) {
-  console.warn(`\n⚠ 共 ${totalProblems} 个图片引用需要处理。绝对路径必须在本地改成相对路径后重新提交。`);
-}
+/** 只有直接 `tsx scripts/build-data.ts` 时才执行；被 vite.config.ts import 时不会跑 */
+const entry = process.argv[1] ? path.resolve(process.argv[1]) : '';
+const self = path.resolve(fileURLToPath(import.meta.url));
+const isCli = process.platform === 'win32' ? entry.toLowerCase() === self.toLowerCase() : entry === self;
+if (isCli) buildData();
