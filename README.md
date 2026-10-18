@@ -59,6 +59,8 @@ npm run build
 | `npm run sync -- --dry-run` | 只预览同步结果，不写文件 |
 | `npm run sync -- --prune` | 同时删除源目录里已删掉的文件 |
 | `npm run sync -- --build` | 同步完自动构建 |
+| `npm run sync:commit` | 同步 → 构建校验 → 只提交笔记改动（git commit） |
+| `npm run sync:push` | 同上，并 `git push` 触发 Pages 部署 |
 | `npm run dev` | 生成数据 + 启动 Vite |
 | `npm run data` | 只重新生成 `public/data/*` |
 | `npm run build` | 类型检查 → 生成数据 → 打包到 `dist/` |
@@ -106,14 +108,33 @@ npm run sync -- --from "D:/notes/思维导图" --to "思维导图"
 ### 3. 日常修改 → 上线
 
 ```bash
-# Freeplane 里改完并保存（Ctrl+S）
-npm run sync          # 只复制新增/改过的文件
-npm run check         # 可选：图片体检
-npm run build         # 本地确认页面没问题
-git add -A && git commit -m "docs: 更新笔记" && git push
+# Freeplane 里改完并保存（Ctrl+S），然后一条命令
+npm run sync:push
 ```
 
-推送即触发 Cloudflare Pages 构建，站点自动更新。
+`sync:push` 依次做：同步笔记 → `npm run build` 校验（含 typecheck）→ `git add public/notes` → `git commit` → `git push`。推送即触发 Cloudflare Pages 构建。
+
+只提交、不推送：
+
+```bash
+npm run sync:commit
+```
+
+几个可选参数：
+
+| 参数 | 作用 |
+| --- | --- |
+| `-- -m "提交信息"` | 自定义 commit message（默认 `notes: 新增 2 · 修改 1`） |
+| `-- --no-build` | 跳过构建校验，快速提交 |
+| `-- --prune` | 源里删掉的笔记也一起从仓库删除 |
+| `-- --dry-run` | 只打印将要执行的步骤 |
+
+几个刻意的保护：
+
+- 只 `git add` / `commit` 笔记目录（`notes.config.json` 的 `notesDir`），不会顺手把源码、配置、其他脏文件带进提交；
+- 构建失败直接中止，不留半成品提交；
+- 笔记没有实际变化时跳过，不产生空提交；
+- 推送失败会保留本地提交并提示原因，不会回滚你的工作。
 
 ### 4. 同步是怎么判断的
 

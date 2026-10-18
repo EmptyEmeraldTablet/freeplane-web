@@ -11,6 +11,8 @@
     "preview": "vite preview",
     "check": "tsx scripts/check-images.ts",
     "sync": "tsx scripts/sync-notes.ts",
+    "sync:commit": "tsx scripts/publish.ts",
+    "sync:push": "tsx scripts/publish.ts --push",
     "clean": "tsx scripts/clean.ts",
     "typecheck": "tsc -p tsconfig.json"
   },
