@@ -28,6 +28,7 @@ import type { NotesConfigFile, ResolvedConfig, ResolvedSource } from './shared.t
 
 interface CliOptions {
   init: boolean;
+  save: boolean;
   dryRun: boolean;
   prune: boolean;
   build: boolean;
@@ -38,7 +39,14 @@ interface CliOptions {
 }
 
 function parseArgs(argv: string[]): CliOptions {
-  const opts: CliOptions = { init: false, dryRun: false, prune: false, build: false, help: false };
+  const opts: CliOptions = {
+    init: false,
+    save: false,
+    dryRun: false,
+    prune: false,
+    build: false,
+    help: false,
+  };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i]!;
     const [flag, inline] = arg.includes('=') ? [arg.slice(0, arg.indexOf('=')), arg.slice(arg.indexOf('=') + 1)] : [arg, undefined];
@@ -50,6 +58,9 @@ function parseArgs(argv: string[]): CliOptions {
     switch (flag) {
       case '--init':
         opts.init = true;
+        break;
+      case '--save':
+        opts.save = true;
         break;
       case '--dry-run':
       case '-n':
@@ -88,7 +99,9 @@ const HELP = `笔记同步
   npm run sync -- --dry-run                     只预览，不写文件
   npm run sync -- --prune                       同时删除源里已删除的文件
   npm run sync -- --build                       同步完接着构建
-  npm run sync -- --init --from "<目录>" --to "<子目录>"   初始化配置并首次导入
+  npm run sync -- --from "<目录>" --to "<子目录>"          临时用别的源同步一次（不改配置）
+  npm run sync -- --from "<目录>" --save        把源目录写回配置（长期生效）
+  npm run sync -- --init --from "<目录>" --to "<子目录>"   首次生成 / 更新配置并导入
   npm run sync -- --config <路径>               使用别的配置文件
 
 配置示例（${CONFIG_NAME}）：
@@ -260,30 +273,80 @@ function removeEmptyDirs(dir: string, stopAt: string): void {
   if (fs.readdirSync(dir).length === 0) fs.rmdirSync(dir);
 }
 
-function runInit(configArg: string | undefined, from: string | undefined, to: string | undefined): boolean {
-  const configPath = configArg
-    ? path.resolve(configArg)
-    : path.join(ROOT, CONFIG_NAME);
-  if (fs.existsSync(configPath)) {
-    console.log(`配置已存在：${toPosix(path.relative(process.cwd(), configPath))}（跳过 --init）`);
+const normalizeTarget = (to: string | undefined): string =>
+  (to ?? '').replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
+
+interface ConfigFileShape extends NotesConfigFile {
+  [key: string]: unknown;
+}
+
+function readConfigJson(configPath: string): ConfigFileShape {
+  if (!fs.existsSync(configPath)) return {};
+  try {
+    return JSON.parse(fs.readFileSync(configPath, 'utf8')) as ConfigFileShape;
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * 把 --from / --to 写回配置文件。
+ * 有同名的 to 就更新那一条，没有就追加，方便一个仓库挂多套笔记。
+ */
+function persistSource(configPath: string, from: string, to: string | undefined): void {
+  const exists = fs.existsSync(configPath);
+  const base: ConfigFileShape = exists
+    ? readConfigJson(configPath)
+    : {
+        _说明: 'from 改成 Freeplane 里笔记所在目录（可写绝对路径）；to 是导入到 public/notes 下的子目录。',
+        notesDir: 'public/notes',
+        extensions: DEFAULT_EXTENSIONS,
+        prune: false,
+      };
+
+  // 用户给的相对路径按当前工作目录解析后写成绝对路径，避免和配置文件位置产生歧义
+  const sourcePath = toPosix(path.resolve(from));
+  const target = normalizeTarget(to) || normalizeTarget(base.sources?.[0]?.to) || '思维导图';
+  const sources = Array.isArray(base.sources) ? base.sources.map((s) => ({ ...s })) : [];
+  const index = sources.findIndex((s) => normalizeTarget(s.to) === target);
+  if (index >= 0) sources[index] = { ...sources[index], from: sourcePath, to: target };
+  else sources.push({ from: sourcePath, to: target });
+
+  const next: ConfigFileShape = {
+    ...base,
+    notesDir: base.notesDir ?? 'public/notes',
+    sources,
+  };
+  fs.mkdirSync(path.dirname(configPath), { recursive: true });
+  fs.writeFileSync(configPath, `${JSON.stringify(next, null, 2)}\n`);
+
+  console.log(`${exists ? '已更新配置' : '已生成配置'}：${toPosix(path.relative(process.cwd(), configPath))}`);
+  console.log(`  from: ${sourcePath}`);
+  console.log(`  to:   ${target}`);
+}
+
+/** --init：没有配置就生成（带占位提示），有配置且给了 --from 就更新 */
+function runInit(configPath: string, from: string | undefined, to: string | undefined): boolean {
+  const exists = fs.existsSync(configPath);
+  if (from) {
+    persistSource(configPath, from, to);
     return false;
   }
-  // 用户给的相对路径按当前工作目录解析后写成绝对路径，避免和配置文件位置产生歧义
-  const sourcePath = from ? toPosix(path.resolve(from)) : '../../我的笔记/思维导图';
-  const target = (to ?? '思维导图').replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
+  if (exists) {
+    console.log(`配置已存在：${toPosix(path.relative(process.cwd(), configPath))}（未改动）`);
+    console.log('  要换源：npm run sync -- --from "<目录>" --to "<子目录>" --save');
+    return false;
+  }
   const template: NotesConfigFile = {
     notesDir: 'public/notes',
-    sources: [{ from: sourcePath, to: target }],
+    sources: [{ from: '../../我的笔记/思维导图', to: '思维导图' }],
     extensions: DEFAULT_EXTENSIONS,
     prune: false,
   };
   fs.writeFileSync(configPath, `${JSON.stringify(template, null, 2)}\n`);
   console.log(`已生成配置：${toPosix(path.relative(process.cwd(), configPath))}`);
-  if (!from) {
-    console.log('⚠ 里面的 from 还是占位路径，请改成你的 Freeplane 笔记目录后重跑。');
-    return true;
-  }
-  return false;
+  console.log('⚠ 里面的 from 还是占位路径，请配合 --from 重跑，或直接改这个文件。');
+  return true;
 }
 
 function main(argv: string[]): number {
@@ -293,16 +356,25 @@ function main(argv: string[]): number {
     return 0;
   }
 
+  const configPath = opts.configPath ? path.resolve(opts.configPath) : path.join(ROOT, CONFIG_NAME);
+
   if (opts.init) {
-    const stopped = runInit(opts.configPath, opts.from, opts.to);
+    const stopped = runInit(configPath, opts.from, opts.to);
     if (stopped) return 0;
+  } else if (opts.save) {
+    if (!opts.from) {
+      console.error('✗ --save 需要同时指定 --from "<目录>"');
+      return 1;
+    }
+    persistSource(configPath, opts.from, opts.to);
   }
 
-  const cfg = loadConfig({ required: true, configPath: opts.configPath });
+  const cfg = loadConfig({ required: true, configPath });
 
-  // 允许用 --from/--to 临时覆盖配置里的第一个源
+  // --from/--to 只做一次性覆盖；用 --save / --init 才会写回配置
+  const persisted = opts.init || opts.save;
   let sources = cfg.sources;
-  if (opts.from) {
+  if (opts.from && !persisted) {
     const to = (opts.to ?? sources[0]?.to ?? '').replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
     sources = [
       {

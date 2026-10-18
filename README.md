@@ -59,6 +59,7 @@ npm run build
 | `npm run sync -- --dry-run` | 只预览同步结果，不写文件 |
 | `npm run sync -- --prune` | 同时删除源目录里已删掉的文件 |
 | `npm run sync -- --build` | 同步完自动构建 |
+| `npm run sync -- --from "<目录>" --save` | 把源目录写回 `notes.config.json`（长期生效） |
 | `npm run sync:commit` | 同步 → 构建校验 → 只提交笔记改动（git commit） |
 | `npm run sync:push` | 同上，并 `git push` 触发 Pages 部署 |
 | `npm run dev` | 生成数据 + 启动 Vite |
@@ -95,15 +96,22 @@ npm run build
 ### 2. 首次导入
 
 ```bash
-# 方式一：让脚本生成配置并立刻导入（推荐）
+# 方式一：生成 / 更新配置并立刻导入（推荐）
+#   配置已存在时，--init 会更新对应 to 的那一条，而不是跳过
 npm run sync -- --init --from "D:/notes/思维导图" --to "思维导图"
 
 # 方式二：先手写 notes.config.json，再
 npm run sync
 
-# 方式三：临时指定源，不改配置文件
+# 方式三：临时用别的源同步一次，不动配置
 npm run sync -- --from "D:/notes/思维导图" --to "思维导图"
+
+# 方式四：同步的同时把源写回配置
+npm run sync -- --from "D:/notes/思维导图" --to "思维导图" --save
 ```
+
+> 模板里的 `notes.config.json` 带的是占位路径 `D:/path/to/Freeplane/思维导图`。
+> 直接跑 `npm run sync` 会报「源目录不存在」，用方式一或方式四指定真实目录即可。
 
 ### 3. 日常修改 → 上线
 
@@ -131,7 +139,7 @@ npm run sync:commit
 
 几个刻意的保护：
 
-- 只 `git add` / `commit` 笔记目录（`notes.config.json` 的 `notesDir`），不会顺手把源码、配置、其他脏文件带进提交；
+- 只 `git add` / `commit` 笔记目录（`notes.config.json` 的 `notesDir`）和 `notes.config.json` 本身，不会顺手把源码、其他脏文件带进提交；
 - 构建失败直接中止，不留半成品提交；
 - 笔记没有实际变化时跳过，不产生空提交；
 - 推送失败会保留本地提交并提示原因，不会回滚你的工作。

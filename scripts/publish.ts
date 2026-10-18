@@ -114,15 +114,21 @@ interface ChangeCount {
   modified: number;
   deleted: number;
   files: string[];
+  /** 配置文件是否也有改动（单独统计，不混进笔记数量） */
+  configChanged: boolean;
 }
 
-function parsePorcelain(out: string): ChangeCount {
-  const stats: ChangeCount = { added: 0, modified: 0, deleted: 0, files: [] };
+function parsePorcelain(out: string, configRel: string | null): ChangeCount {
+  const stats: ChangeCount = { added: 0, modified: 0, deleted: 0, files: [], configChanged: false };
   for (const line of out.split('\n')) {
     const trimmed = line.trimEnd();
     if (!trimmed) continue;
     const index = trimmed[0]!;
     const file = trimmed.slice(3);
+    if (configRel && file === configRel) {
+      stats.configChanged = true;
+      continue;
+    }
     if (index === 'A') stats.added++;
     else if (index === 'D') stats.deleted++;
     else stats.modified++;
@@ -146,6 +152,11 @@ function describe(stats: ChangeCount): string {
   if (stats.modified) parts.push(`修改 ${stats.modified}`);
   if (stats.deleted) parts.push(`删除 ${stats.deleted}`);
   return parts.join(' · ');
+}
+
+function defaultMessage(stats: ChangeCount): string {
+  if (!stats.files.length) return 'chore: 更新笔记配置';
+  return `notes: ${describe(stats)}${stats.configChanged ? ' · 更新配置' : ''}`;
 }
 
 function main(argv: string[]): number {
@@ -188,6 +199,11 @@ function main(argv: string[]): number {
     return 1;
   }
 
+  // 配置文件如果在仓库里，也一起提交（避免每次 sync 后工作区永远脏一块）
+  const configRel = toPosix(path.relative(repoRoot, cfg.configPath));
+  const configInRepo = Boolean(configRel) && !configRel.startsWith('..') && !path.isAbsolute(configRel);
+  const paths = configInRepo ? [notesRel, configRel] : [notesRel];
+
   console.log(`仓库：${toPosix(path.relative(ROOT, repoRoot)) || '.'}`);
   console.log(`笔记：${notesRel}/`);
 
@@ -210,30 +226,33 @@ function main(argv: string[]): number {
     }
   }
 
-  // 4. 暂存笔记
+  // 4. 暂存笔记（+ 配置）
   console.log('\n▶ 暂存改动');
-  const add = git(['add', '-A', '--', notesRel]);
+  const add = git(['add', '-A', '--', ...paths]);
   if (add.status !== 0) {
     console.error(`✗ git add 失败：${add.out.trim()}`);
     return 1;
   }
 
   // core.quotepath=false：中文文件名不要被转成 \346\226\207 这种八进制
-  const status = git(['-c', 'core.quotepath=false', 'status', '--porcelain', '--', notesRel], true);
-  const stats = parsePorcelain(status.out);
-  if (!stats.files.length) {
+  const status = git(['-c', 'core.quotepath=false', 'status', '--porcelain', '--', ...paths], true);
+  const stats = parsePorcelain(status.out, configInRepo ? configRel : null);
+  if (!stats.files.length && !stats.configChanged) {
     console.log('笔记没有变化，跳过提交。');
     if (opts.push) console.log('提示：没有新提交，也就不会推送。');
     return 0;
   }
 
-  console.log(`  待提交 ${stats.files.length} 个文件`);
-  for (const f of stats.files.slice(0, 10)) console.log(`    ${f}`);
-  if (stats.files.length > 10) console.log(`    … 其余 ${stats.files.length - 10} 个`);
+  if (stats.files.length) {
+    console.log(`  待提交 ${stats.files.length} 个笔记文件`);
+    for (const f of stats.files.slice(0, 10)) console.log(`    ${f}`);
+    if (stats.files.length > 10) console.log(`    … 其余 ${stats.files.length - 10} 个`);
+  }
+  if (stats.configChanged) console.log(`  同时更新配置：${configRel}`);
 
   // 5. 提交
-  const message = opts.message ?? `notes: ${describe(stats)}`;
-  const commit = git(['commit', '-m', message, '--', notesRel]);
+  const message = opts.message ?? defaultMessage(stats);
+  const commit = git(['commit', '-m', message, '--', ...paths]);
   if (commit.status !== 0) {
     console.error('\n✗ git commit 失败（可能没有配置 user.name / user.email）。');
     return 1;
