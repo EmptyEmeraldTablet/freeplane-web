@@ -1,0 +1,17 @@
+# 依赖与构建产物
+node_modules/
+dist/
+public/data/
+
+# 笔记同步状态（每台机器不同，不要提交）
+.notes-sync.json
+
+# 回收站：清理掉的笔记与旧产物都在这里，永不提交
+.trash/
+
+# 日志与系统垃圾
+*.log
+*.err
+.DS_Store
+Thumbs.db
+desktop.ini

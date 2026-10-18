@@ -1,0 +1,30 @@
+{
+  "name": "freeplane-notes-web",
+  "private": true,
+  "version": "0.3.0",
+  "type": "module",
+  "description": "Freeplane .mm 只读笔记站模板：同步脚本 + 构建期解析 + markmap 渲染",
+  "scripts": {
+    "data": "tsx scripts/build-data.ts",
+    "dev": "npm run data && vite",
+    "build": "npm run typecheck && npm run data && vite build",
+    "preview": "vite preview",
+    "check": "tsx scripts/check-images.ts",
+    "sync": "tsx scripts/sync-notes.ts",
+    "clean": "tsx scripts/clean.ts",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "dompurify": "^3.4.17",
+    "markmap-view": "^0.18.12"
+  },
+  "devDependencies": {
+    "@types/d3": "^7.4.3",
+    "@types/node": "^26.6.5",
+    "markmap-common": "^0.18.9",
+    "saxes": "^6.0.0",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.4"
+  }
+}

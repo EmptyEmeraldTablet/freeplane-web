@@ -1,0 +1,13 @@
+{
+  "_说明": "from 改成 Freeplane 里笔记所在目录（可写绝对路径，D:/notes/思维导图）；to 是导入到 public/notes 下的子目录。也可用 npm run sync -- --from \"<目录>\" --to \"<子目录>\" 临时覆盖。",
+  "notesDir": "public/notes",
+  "sources": [
+    {
+      "from": "D:/path/to/Freeplane/思维导图",
+      "to": "思维导图"
+    }
+  ],
+  "extensions": [".mm", ".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".bmp", ".pdf"],
+  "ignore": ["**/~$*", "**/.*", "**/Thumbs.db", "**/desktop.ini", "**/*.tmp"],
+  "prune": false
+}
