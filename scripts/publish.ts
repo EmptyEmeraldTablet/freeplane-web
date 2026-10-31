@@ -18,13 +18,21 @@ interface CliOptions {
   push: boolean;
   build: boolean;
   prune: boolean;
+  keepStale: boolean;
   dryRun: boolean;
   message?: string;
   help: boolean;
 }
 
 function parseArgs(argv: string[]): CliOptions {
-  const opts: CliOptions = { push: false, build: true, prune: false, dryRun: false, help: false };
+  const opts: CliOptions = {
+    push: false,
+    build: true,
+    prune: false,
+    keepStale: false,
+    dryRun: false,
+    help: false,
+  };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i]!;
     const [flag, inline] = arg.includes('=')
@@ -38,7 +46,11 @@ function parseArgs(argv: string[]): CliOptions {
         opts.build = false;
         break;
       case '--prune':
+        // 旧参数：删除已经是默认行为
         opts.prune = true;
+        break;
+      case '--keep-stale':
+        opts.keepStale = true;
         break;
       case '--dry-run':
       case '-n':
@@ -68,7 +80,7 @@ const HELP = `同步并提交
   npm run sync:commit                     同步 → 构建 → git commit
   npm run sync:push                       同上，并 git push
   npm run sync:commit -- --no-build       跳过构建校验
-  npm run sync:commit -- --prune          源里删掉的笔记也从仓库删除
+  npm run sync:commit -- --keep-stale     保留源里已删除的笔记（默认会一起删）
   npm run sync:commit -- -m "提交信息"     自定义 commit message
   npm run sync:commit -- --dry-run        只打印步骤，不写任何东西
 
@@ -167,7 +179,7 @@ function main(argv: string[]): number {
   }
 
   const steps = [
-    `npm run sync${opts.prune ? ' -- --prune' : ''}`,
+    `npm run sync${opts.keepStale ? ' -- --keep-stale' : ''}`,
     opts.build ? 'npm run build' : '(跳过构建)',
     'git add -A -- <notesDir>',
     'git commit -m "<自动生成>"',
@@ -209,7 +221,7 @@ function main(argv: string[]): number {
 
   // 2. 同步
   console.log('\n▶ 同步笔记');
-  const sync = npm('sync', opts.prune ? ['--', '--prune'] : []);
+  const sync = npm('sync', opts.keepStale ? ['--', '--keep-stale'] : []);
   if (sync.status !== 0) {
     console.error('\n✗ 同步失败，已中止（没有提交任何东西）。');
     return 1;

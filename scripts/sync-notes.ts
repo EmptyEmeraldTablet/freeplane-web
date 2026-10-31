@@ -2,9 +2,9 @@
 /**
  * 笔记同步：把 Freeplane 里的 .mm 及其图片目录增量同步进 public/notes。
  *
- *   npm run sync                       # 按 notes.config.json 增量同步
+ *   npm run sync                       # 按 notes.config.json 镜像同步（含删除）
  *   npm run sync -- --dry-run          # 只预览，不写文件
- *   npm run sync -- --prune            # 同时删除源里已删掉的文件
+ *   npm run sync -- --keep-stale       # 保留源里已删掉的旧文件
  *   npm run sync -- --build            # 同步完自动 npm run build
  *   npm run sync -- --init --from "D:/notes/思维导图" --to "思维导图"
  *
@@ -30,7 +30,12 @@ interface CliOptions {
   init: boolean;
   save: boolean;
   dryRun: boolean;
+  /** 兼容旧参数：现在默认就会删除源里已不存在的文件 */
   prune: boolean;
+  /** 保留目标里多出来的文件（不删除） */
+  keepStale: boolean;
+  /** 源目录为空时仍然继续（会清空目标，危险） */
+  force: boolean;
   build: boolean;
   help: boolean;
   configPath?: string;
@@ -44,6 +49,8 @@ function parseArgs(argv: string[]): CliOptions {
     save: false,
     dryRun: false,
     prune: false,
+    keepStale: false,
+    force: false,
     build: false,
     help: false,
   };
@@ -67,7 +74,14 @@ function parseArgs(argv: string[]): CliOptions {
         opts.dryRun = true;
         break;
       case '--prune':
+        // 旧参数：删除已经是默认行为，保留只为不报「未知参数」
         opts.prune = true;
+        break;
+      case '--keep-stale':
+        opts.keepStale = true;
+        break;
+      case '--force':
+        opts.force = true;
         break;
       case '--build':
         opts.build = true;
@@ -95,9 +109,10 @@ function parseArgs(argv: string[]): CliOptions {
 const HELP = `笔记同步
 
 用法：
-  npm run sync                                  按 ${CONFIG_NAME} 增量同步
+  npm run sync                                  镜像同步（源里删掉 / 改名的文件会一起删）
+  npm run sync -- --keep-stale                  保留目标里多出来的文件（不删）
   npm run sync -- --dry-run                     只预览，不写文件
-  npm run sync -- --prune                       同时删除源里已删除的文件
+  npm run sync -- --force                       源目录为空时仍继续（危险）
   npm run sync -- --build                       同步完接着构建
   npm run sync -- --from "<目录>" --to "<子目录>"          临时用别的源同步一次（不改配置）
   npm run sync -- --from "<目录>" --save        把源目录写回配置（长期生效）
@@ -188,6 +203,25 @@ interface SourceResult {
   files: Record<string, StateEntry>;
 }
 
+/** 列出目标目录里已经存在、扩展名在同步范围内的文件（posix 相对路径） */
+function collectTargetFiles(root: string, extensions: string[]): string[] {
+  if (!fs.existsSync(root)) return [];
+  const out: string[] = [];
+  const walk = (dirAbs: string, base: string): void => {
+    for (const entry of fs.readdirSync(dirAbs, { withFileTypes: true })) {
+      const rel = base ? `${base}/${entry.name}` : entry.name;
+      if (entry.isDirectory()) {
+        walk(path.join(dirAbs, entry.name), rel);
+        continue;
+      }
+      if (!entry.isFile()) continue;
+      if (extensions.includes(path.extname(entry.name).toLowerCase())) out.push(rel);
+    }
+  };
+  walk(root, '');
+  return out.sort((a, b) => a.localeCompare(b, 'zh'));
+}
+
 function syncSource(
   cfg: ResolvedConfig,
   src: ResolvedSource,
@@ -196,6 +230,16 @@ function syncSource(
 ): SourceResult {
   const destRoot = path.join(cfg.notesDir, src.to);
   const { files } = collectFiles(src);
+  const targetFiles = collectTargetFiles(destRoot, src.extensions);
+
+  // 保护：源目录空了（路径写错 / 盘符没挂载）而目标还有内容，默认中止，避免把笔记删光
+  if (!files.length && targetFiles.length && !opts.force) {
+    throw new Error(
+      `[${src.label}] 源目录里没有可同步的文件，但目标里还有 ${targetFiles.length} 个；` +
+        `为避免误删已中止。确认源目录正确后，确实要清空请加 --force。`,
+    );
+  }
+
   const result: SourceResult = {
     added: [],
     updated: [],
@@ -240,23 +284,21 @@ function syncSource(
     result.bytes += file.size;
   }
 
-  // 源里删掉的文件
-  for (const rel of Object.keys(prevFiles)) {
+  /**
+   * 源里删掉 / 改名的文件：直接扫目标目录比记录更可靠
+   * （换机器、丢 .notes-sync.json 之后也能正确清理）。
+   */
+  for (const rel of targetFiles) {
     if (current.has(rel)) continue;
-    const destAbs = path.join(destRoot, ...rel.split('/'));
-    // 目标里也没了：直接把它从同步记录里丢掉
-    if (!fs.existsSync(destAbs)) continue;
-    if (!opts.prune) {
+    if (opts.keepStale) {
       result.pendingRemoval.push(rel);
-      // 保留记录，否则下次就跑 --prune 也找不到它了
-      result.files[rel] = prevFiles[rel]!;
       continue;
     }
     if (opts.dryRun) {
       result.removed.push(rel);
       continue;
     }
-    fs.rmSync(destAbs);
+    fs.rmSync(path.join(destRoot, ...rel.split('/')), { force: true });
     result.removed.push(rel);
   }
 
@@ -429,7 +471,7 @@ function main(argv: string[]): number {
     if (result.updated.length > 20) console.log(`  ~ … 其余 ${result.updated.length - 20} 个`);
     for (const f of result.removed.slice(0, 20)) console.log(`  - ${f}`);
     if (result.pendingRemoval.length) {
-      console.log(`  ! 源里已删除但目标仍保留（加 --prune 才会删）：`);
+      console.log(`  ! 源里已删除但按 --keep-stale 保留：`);
       for (const f of result.pendingRemoval.slice(0, 10)) console.log(`    - ${f}`);
     }
 
@@ -454,7 +496,7 @@ function main(argv: string[]): number {
     `\n合计：新增 ${totalAdd} · 更新 ${totalUpdate} · 删除 ${totalRemove}` +
       ` · 复制 ${formatBytes(totalBytes)}${opts.dryRun ? '（预览，未写入）' : ''}`,
   );
-  if (totalPending) console.log(`提示：${totalPending} 个文件在目标里已多余，需要时执行 npm run sync -- --prune`);
+  if (totalPending) console.log(`提示：${totalPending} 个文件因 --keep-stale 被保留，去掉该参数即可删除`);
   if (!totalAdd && !totalUpdate && !totalRemove) console.log('已经是最新，无变化。');
 
   if (failed) return 1;

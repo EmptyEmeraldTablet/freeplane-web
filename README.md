@@ -55,9 +55,9 @@ npm run build
 
 | 命令 | 作用 |
 | --- | --- |
-| `npm run sync` | 按 `notes.config.json` 把笔记增量同步进 `public/notes` |
+| `npm run sync` | 按 `notes.config.json` 把笔记**镜像**同步进 `public/notes`（含删除） |
 | `npm run sync -- --dry-run` | 只预览同步结果，不写文件 |
-| `npm run sync -- --prune` | 同时删除源目录里已删掉的文件 |
+| `npm run sync -- --keep-stale` | 保留源目录里已删掉 / 改名的旧文件 |
 | `npm run sync -- --build` | 同步完自动构建 |
 | `npm run sync -- --from "<目录>" --save` | 把源目录写回 `notes.config.json`（长期生效） |
 | `npm run sync:commit` | 同步 → 构建校验 → 只提交笔记改动（git commit） |
@@ -134,7 +134,7 @@ npm run sync:commit
 | --- | --- |
 | `-- -m "提交信息"` | 自定义 commit message（默认 `notes: 新增 2 · 修改 1`） |
 | `-- --no-build` | 跳过构建校验，快速提交 |
-| `-- --prune` | 源里删掉的笔记也一起从仓库删除 |
+| `-- --keep-stale` | 源里删掉的笔记保留在仓库里（默认会一起删） |
 | `-- --dry-run` | 只打印将要执行的步骤 |
 
 几个刻意的保护：
@@ -148,8 +148,12 @@ npm run sync:commit
 
 - 每个源文件记录「大小 + mtime」到 `.notes-sync.json`（已 gitignore，不提交）。
 - 目标不存在 → 新增；大小变化或源 mtime 变化 → 更新；否则跳过。
-- 源里删掉的文件默认**保留**在目标里，只提示 `待删除`；加 `--prune` 才会真正删除，并顺手清掉空目录。
-- 非 `.mm` / 图片 / PDF 的文件（`.log`、`.tmp` 等）不会被复制。
+- 源里删掉的文件 → **默认从 `public/notes` 删除**（镜像语义），并清掉空目录；想保留旧文件就加 `--keep-stale`。
+- 在 Freeplane 里**改名 = 删除 + 新增**，所以改名后同步会删旧文件、加新文件，不会留下重复的两份。
+- 非 `.mm` / 图片 / PDF 的文件（`.log`、`.tmp` 等）不会被复制，也不会被删除。
+- 保护：源目录为空（路径写错 / 盘没挂载）而目标还有文件时，同步会中止并提示；确认要清空需显式加 `--force`。
+
+> `public/notes/<to>/` 这个目录由同步脚本管理，不要手动往里放文件——下次同步会被当成「源里已删除」而清理掉。
 
 > CI（Cloudflare Pages）只跑 `npm run build`，不跑 `sync`。所以**笔记本体要提交进仓库**，同步状态文件不用提交。
 
