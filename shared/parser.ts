@@ -57,9 +57,16 @@ export function parseFreeplane(xml: string): ParsedMap {
    * 关键：richcontent 里是 HTML，不是 XML。
    * 如果让 XML 解析器直接穿过它，标签会被当成元素丢掉、不规范实体还会报错。
    * 做法：先把每段 HTML 原文抽出来换成占位符，解析完再原样填回。
+   *
+   * 另一个坑：Freeplane 1.12.15 会在 <map_styles> 里写入自闭合的空 richcontent
+   * （<richcontent TYPE="DETAILS" CONTENT-TYPE="plain/auto"/>）。
+   * 这类标签必须先摘掉，否则下面的成对正则会把「/>」当成开标签的结尾，
+   * 一路惰性匹配到后面第一个真正的 </richcontent>，把中间的节点 XML 一起当 HTML 抽走，
+   * 导致 <node> 与 </node> 数量失衡、saxes 在 </map> 处报 unmatched closing tag。
    */
+  const withoutEmptyRich = xml.replace(/<richcontent\b[^>]*?\/\s*>/gi, '');
   const blocks: RichBlock[] = [];
-  const stripped = xml.replace(
+  const stripped = withoutEmptyRich.replace(
     /<richcontent\b([^>]*)>([\s\S]*?)<\/richcontent>/gi,
     (_m, attrs: string, body: string) => {
       const type = /TYPE\s*=\s*"([^"]*)"/i.exec(attrs)?.[1] ?? '';
