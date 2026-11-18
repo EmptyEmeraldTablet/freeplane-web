@@ -509,9 +509,10 @@ function bindEvents(): void {
   });
 
   $('#detailClose').onclick = () => {
+    // 只收起面板，不要 fit()：用户可能已经放大平移到某个叶子节点，
+    // 关闭详情时重置视图会让人丢失当前位置（节点多的图尤其难受）。
     closeDetailPanel();
     state.mm?.setHighlight(null);
-    void state.mm?.fit();
   };
   $('#btnFit').onclick = () => void state.mm?.fit();
   $('#btnZoomIn').onclick = () => void zoomBy(1.25);
