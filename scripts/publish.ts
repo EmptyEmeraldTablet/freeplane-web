@@ -171,6 +171,37 @@ function defaultMessage(stats: ChangeCount): string {
   return `notes: ${describe(stats)}${stats.configChanged ? ' · 更新配置' : ''}`;
 }
 
+interface UpstreamState {
+  /** 有 upstream 时可信；没有 upstream（全新分支 / 没配远程）时为 false */
+  known: boolean;
+  ahead: number;
+  behind: number;
+}
+
+function upstreamState(): UpstreamState {
+  const ahead = git(['rev-list', '--count', '@{u}..HEAD'], true);
+  const behind = git(['rev-list', '--count', 'HEAD..@{u}'], true);
+  if (ahead.status !== 0) return { known: false, ahead: 0, behind: 0 };
+  return {
+    known: true,
+    ahead: Number.parseInt(ahead.out.trim(), 10) || 0,
+    behind: Number(behind.out.trim()) || 0,
+  };
+}
+
+/** 推送当前分支；失败时再尝试建立 upstream。返回 0 表示已成功推送 */
+function pushBranch(): number {
+  const push = git(['push'], true);
+  if (push.status === 0) return 0;
+  const branch = git(['rev-parse', '--abbrev-ref', 'HEAD'], true).out.trim();
+  const retry = branch ? git(['push', '-u', 'origin', branch], true) : { status: 1, out: '' };
+  if (retry.status !== 0) {
+    console.error(`✗ 推送失败：${pushErrorText(push.out || retry.out)}`);
+    return 1;
+  }
+  return 0;
+}
+
 function main(argv: string[]): number {
   const opts = parseArgs(argv);
   if (opts.help) {
@@ -251,7 +282,27 @@ function main(argv: string[]): number {
   const stats = parsePorcelain(status.out, configInRepo ? configRel : null);
   if (!stats.files.length && !stats.configChanged) {
     console.log('笔记没有变化，跳过提交。');
-    if (opts.push) console.log('提示：没有新提交，也就不会推送。');
+    if (!opts.push) return 0;
+
+    // 上一次可能「提交成功、推送失败」，所以这里不能直接退出，要看看有没有积压的提交
+    const st = upstreamState();
+    if (st.known && st.ahead === 0) {
+      if (st.behind > 0) {
+        console.error(`✗ 本地落后远程 ${st.behind} 个提交，先 git pull --rebase 再推送。`);
+        return 1;
+      }
+      console.log('✓ 没有待推送的提交，已是最新。');
+      return 0;
+    }
+
+    console.log(`\n▶ 推送${st.known ? `（补推 ${st.ahead} 个未推送的提交）` : '（补推本地提交）'}`);
+    if (pushBranch() !== 0) {
+      console.error('  本地提交仍在，网络恢复后再跑一次 npm run sync:push 会自动补推。');
+      return 1;
+    }
+    const headOut = git(['log', '-1', '--pretty=%h %s'], true).out.trim();
+    console.log('✓ 已推送到远程，Cloudflare Pages 会自动开始构建。');
+    console.log(`\n✓ 完成：${headOut}`);
     return 0;
   }
 
@@ -277,16 +328,10 @@ function main(argv: string[]): number {
   // 6. 推送
   if (opts.push) {
     console.log('\n▶ 推送');
-    const push = git(['push'], true);
-    if (push.status !== 0) {
-      const branch = git(['rev-parse', '--abbrev-ref', 'HEAD'], true).out.trim();
-      const retry = branch ? git(['push', '-u', 'origin', branch], true) : { status: 1, out: '' };
-      if (retry.status !== 0) {
-        console.error(`✗ 推送失败：${pushErrorText(push.out || retry.out)}`);
-        console.error(`  提交已生成本地记录：${head}`);
-        console.error('  配置好 remote 后手动 git push 即可。');
-        return 1;
-      }
+    if (pushBranch() !== 0) {
+      console.error(`  提交已生成本地记录：${head}`);
+      console.error('  网络恢复后再跑一次 npm run sync:push 会自动补推这次提交。');
+      return 1;
     }
     console.log('✓ 已推送到远程，Cloudflare Pages 会自动开始构建。');
   }
