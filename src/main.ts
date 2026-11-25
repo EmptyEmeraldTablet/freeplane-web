@@ -441,11 +441,18 @@ async function locate(id: string | null | undefined, openPanel = false): Promise
   for (const n of chain) {
     if (n.payload?.fold) await state.mm.toggleNode(n, false);
   }
-  if (getScale() < 0.45) await setScale(0.85);
-  await state.mm.centerNode(target, { left: 100, right: 100, top: 90, bottom: 90 });
+
+  // 先开详情面板：桌面端右侧面板会占掉一块宽度，手机端是底部抽屉，
+  // 它们都会改变画布可视区域，所以要在布局稳定之后再居中。
+  if (openPanel) showDetail(target.payload.node);
+  await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+
+  // 跳转时给个舒服的放大级别：太小看不清，太大又丢上下文
+  const flyScale = isNarrow() ? 0.95 : 1.15;
+  if (getScale() < flyScale - 0.05) await setScale(flyScale);
+  await state.mm.centerNode(target, { left: 120, right: 120, top: 100, bottom: 100 });
   await state.mm.setHighlight(target);
   renderCrumbs(target);
-  if (openPanel) showDetail(target.payload.node);
   closeSidebar();
   setTimeout(() => void state.mm?.setHighlight(null), 2200);
 }

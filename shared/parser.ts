@@ -195,5 +195,18 @@ export function parseFreeplane(xml: string): ParsedMap {
   if (root) walk(root);
   freeNodes.forEach(walk);
 
+  /**
+   * 有些 .mm（由其它工具生成 / 导入）节点上没有任何 ID 属性。
+   * 没有 ID 时 index 里定位不到节点，搜索点击、面包屑、子节点跳转都会「点了没反应」，
+   * 所以按文档顺序补一个稳定的合成 ID（_n 前缀，避开 Freeplane 的 ID_xxx）。
+   */
+  let autoId = 0;
+  const ensureIds = (n: MapNode): void => {
+    if (!n.id) n.id = `_n${++autoId}`;
+    n.children.forEach(ensureIds);
+  };
+  if (root) ensureIds(root);
+  freeNodes.forEach(ensureIds);
+
   return { version, root, freeNodes, error: parseError };
 }
